@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>老虎機遊戲</title>
+    <script src="https://cdn.jsdelivr.net/npm/vue@2.6.14/dist/vue.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+        }
+        #app {
+            text-align: center;
+        }
+        .reels {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 20px;
+        }
+        .reel {
+            width: 100px;
+            height: 300px;
+            border: 2px solid #333;
+            margin: 0 5px;
+            overflow: hidden;
+            position: relative;
+        }
+        .symbols-container {
+            position: absolute;
+            left: 0;
+            width: 100%;
+            transition: top 5s cubic-bezier(0.25, 0.1, 0.25, 1);
+        }
+        .symbol {
+            width: 100%;
+            height: 100px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 24px;
+            border-bottom: 1px solid #ccc;
+        }
+        .controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 20px;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+        }
+        .bet-amount {
+            display: flex;
+            align-items: center;
+        }
+        .bet-amount button {
+            margin: 0 5px;
+            width: 40px;
+        }
+        .disabled {
+            opacity: 0.5;
+            pointer-events: none;
+        }
+        .game-container {
+            display: flex;
+            justify-content: space-around;
+            align-items: flex-start;
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        .game-area {
+            flex: 1;
+        }
+        .info-area {
+            flex: 1;
+            text-align: left;
+            padding: 20px;
+            background-color: #f8f8f8;
+            border-radius: 10px;
+            margin-left: 20px;
+        }
+        .info-area h3 {
+            margin-top: 0;
+        }
+        .info-area ul {
+            padding-left: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <h1>slot machine</h1>
+        <div class="game-container">
+            <div class="game-area">
+                <h2>Money: {{ currentMoney }}</h2>
+                <div class="reels">
+                    <div class="reel" v-for="(reel, reelIndex) in reelResults" :key="reelIndex">
+                        <div class="symbols-container" :ref="'reel' + reelIndex">
+                            <div class="symbol" v-for="(symbol, symbolIndex) in reel" :key="symbolIndex">
+                                {{ symbol }}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="controls">
+                    <div class="bet-amount" :class="{ disabled: fpMax > 0 || isSpinning }">
+                        bet
+                        <button @click="decreaseBet" :disabled="isSpinning">-</button>
+                        {{ betAmount }}
+                        <button @click="increaseBet" :disabled="isSpinning">+</button>
+                    </div>
+                    <div>win {{ winAmount }}</div>
+                    <div>
+                        <template v-if="currentMode === 'pf'">
+                            free spin {{ fpMax - fpUsed }}/{{ fpMax }}
+                        </template>
+                    </div>
+                    <button @click="spin" :disabled="isSpinning">spin</button>
+                </div>
+            </div>
+            <div class="info-area">
+                <button @click="toggleRules">{{ showRules ? 'Hide Rule' : 'Show Rule' }}</button>
+                <div v-if="showRules">
+                    <ul>
+                        <li>symbol 3 Scatter</li>
+                        <li>get Scatter symbols can trigger free spin
+                            <ul>
+                                <li>3 Scatter：5 free spins</li>
+                                <li>4 Scatter：10 free spins</li>
+                                <li>5 Scatter：15 free spins</li>
+                            </ul>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        new Vue({
+            el: '#app',
+            data: {
+                currentMoney: 10000,
+                betAmount: 100,
+                winAmount: 0,
+                reelResults: [
+                    [1, 2, 3],
+                    [1, 2, 3],
+                    [1, 2, 3],
+                    [1, 2, 3],
+                    [1, 2, 3]
+                ],
+                fpMax: 0,
+                fpUsed: 0,
+                modeStack: [],
+                isSpinning: false,
+                currentMode: 'normal',
+                showRules: false // 添加这一行
+            },
+            methods: {
+                decreaseBet() {
+                    if (this.fpMax === 0 && this.betAmount > 100) {
+                        this.betAmount -= 100;
+                    }
+                },
+                increaseBet() {
+                    if (this.fpMax === 0 && this.betAmount < 1000) {
+                        this.betAmount += 100;
+                    }
+                },
+                spin() {
+                    if (this.isSpinning) return;
+                    this.isSpinning = true;
+
+                    const postData = {
+                        betAmount: this.betAmount,
+                        fpMax: this.fpMax,
+                        fpUsed: this.fpUsed,
+                        modeStack: this.modeStack
+                    };
+                    console.log('Sending data to API:', postData);
+
+                    axios.post('core.php', postData, {
+                        headers: {
+                            'Content-Type': 'application/json'
+                        }
+                    })
+                    .then(response => {
+                        // console.log('原始API回應:', response);
+                        let result = response.data;
+                        // console.log('API回傳��料:', result);
+
+                        if (typeof result === 'string' && result.startsWith('Array')) {
+                            try {
+                                result = JSON.parse(result.replace(/^Array/, ''));
+                                if (Array.isArray(result) && result.length > 0) {
+                                    result = result[0];
+                                }
+                            } catch (error) {
+                                console.error('解析API回傳資料時出錯:', error);
+                            }
+                        }
+
+
+                        if (result.reelResults && Array.isArray(result.reelResults)) {
+                            this.reelResults = result.reelResults;
+                            // console.log('更新後的reelResults:', this.reelResults);
+                        } else {
+                            console.error('Invalid reelResults data:', result.reelResults);
+                            // 使用預設的reelResults
+                            this.reelResults = [
+                                [1, 1, 1],
+                                [2, 2, 2],
+                                [1, 2, 3],
+                                [1, 2, 3],
+                                [1, 2, 3]
+                            ];
+                        }
+
+                        this.winAmount = result.reward || 0;
+                        // 只有在非免費遊戲模式下才扣除投注額
+                        if (this.fpMax === 0) {
+                            this.currentMoney += (result.reward || 0) - this.betAmount;
+                        } else {
+                            this.currentMoney += (result.reward || 0);
+                        }
+                        this.fpMax = result.fpMax || 0;
+                        this.fpUsed = result.fpUsed || 0;
+                        this.modeStack = result.modeStack || [];
+                        this.currentMode = result.mode || 'normal';
+
+                        // 開始動畫
+                        this.animateReels();
+
+                        // 將延遲時間從 3000 毫秒（3改為 2800 毫秒（2.8秒）
+                        setTimeout(() => {
+                            this.showFinalResults();
+                            this.isSpinning = false;
+                        }, 1000);
+                    })
+                    .catch(error => {
+                        console.error('API請求錯誤:', error);
+                        if (error.response) {
+                            console.error('錯誤回應資料:', error.response.data);
+                            console.error('錯誤狀態碼:', error.response.status);
+                        }
+                        this.isSpinning = false;
+                    });
+                },
+                animateReels() {
+                    this.$nextTick(() => {
+                        const randomReels = this.generateRandomReels();
+                        for (let i = 0; i < randomReels.length; i++) {
+                            const reelRef = this.$refs['reel' + i];
+                            if (reelRef && reelRef[0]) {
+                                const reel = reelRef[0];
+                                const symbolHeight = 100; // 假設每個符號的高度為100px
+                                const reelSymbols = randomReels[i];
+                                const totalSymbols = reelSymbols.length;
+                                const repeatCount = Math.ceil(600 / (symbolHeight * totalSymbols)) + 1;
+
+                                // 創建重複的符號列表
+                                const symbols = Array(repeatCount).fill(reelSymbols).flat();
+                                reel.innerHTML = symbols.map(symbol => `<div class="symbol">${symbol}</div>`).join('');
+
+                                const totalHeight = symbols.length * symbolHeight;
+
+                                // 重置動畫
+                                reel.style.transition = 'none';
+                                reel.style.top = `-${totalHeight - 300}px`;
+
+                                // 觸發重排
+                                void reel.offsetHeight;
+
+                                // 開始動畫（向下滾動）
+                                reel.style.transition = `top ${3 + i * 0.1}s cubic-bezier(0.25, 0.1, 0.25, 1)`;
+                                reel.style.top = '0px';
+                            }
+                        }
+                    });
+                },
+
+                generateRandomReels() {
+                    const reels = [];
+                    for (let i = 0; i < 5; i++) {
+                        const reel = [];
+                        for (let j = 0; j < 20; j++) {
+                            reel.push(Math.floor(Math.random() * 4) + 1); // 假設有7種符號
+                        }
+                        reels.push(reel);
+                    }
+                    return reels;
+                },
+                showFinalResults() {
+                    // 顯示最終結果
+                    this.$nextTick(() => {
+                        for (let i = 0; i < this.reelResults.length; i++) {
+                            const reelRef = this.$refs['reel' + i];
+                            if (reelRef && reelRef[0]) {
+                                const reel = reelRef[0];
+                                const symbolHeight = 100; // 假設每個符號的高度為100px
+                                const finalPosition = -symbolHeight * (this.reelResults[i].length - 3);
+
+                                reel.style.transition = 'top 0.2s ease-out';
+                                reel.style.top = `${finalPosition}px`;
+                            }
+                        }
+                    });
+                    console.log('最終顯示的reelResults:', this.reelResults);
+                },
+
+                toggleRules() {
+                    this.showRules = !this.showRules;
+                }
+            }
+        });
+    </script>
+</body>
+</html>
