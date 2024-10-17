@@ -1,0 +1,371 @@
+<?php
+
+// 在文件开头添加这些行
+header("Access-Control-Allow-Origin: *");
+header("Access-Control-Allow-Methods: POST, GET, OPTIONS");
+header("Access-Control-Allow-Headers: Content-Type");
+
+if ($_SERVER['REQUEST_METHOD'] == 'OPTIONS') {
+    exit(0);
+}
+
+// 获取原始POST数据
+$input = file_get_contents('php://input');
+$postData = json_decode($input, true);
+
+// 如果json_decode失败，尝试解析URL编码的数据
+if ($postData === null) {
+    parse_str($input, $postData);
+}
+
+// 如果还是为空，尝试使用$_POST
+if (empty($postData)) {
+    $postData = $_POST;
+}
+
+// 记录接收到的数据
+error_log("Received data: " . print_r($postData, true));
+
+// 使用接收到的数据更新配置
+$config = [
+    'reelSize' => [3, 5],
+    'pfTriggerSymbol' => 3,
+    'pfRoundsConfig' => [3 => 5, 4 => 10, 5 => 15],
+    'payTable' => [
+        3 => [5, 5, 10],
+        4 => [10, 10, 20],
+        5 => [15, 15, 30]
+    ],
+    'totalBet' => $postData['betAmount'] ?? 10,
+    'pfTriggerReward' => [3 => 5, 4 => 10, 5 => 20],
+    'paylineConfig' => [
+        [0, 0, 0, 0, 0],
+        [1, 1, 1, 1, 1],
+        [2, 1, 0, 1, 2],
+        [2, 1, 2, 1, 2],
+        [0, 1, 2, 1, 0],
+    ],
+    'normalReelConfigs' => [
+        'normal1' => [
+            [1, 2, 3, 4],
+            [1, 2, 3, 4],
+            [1, 2, 3, 4],
+            [1, 2, 3, 4],
+            [1, 2, 3, 4]
+        ],
+        'normal2' => [
+            [2, 3, 4, 5],
+            [2, 3, 4, 5],
+            [2, 3, 4, 5],
+            [2, 3, 4, 5],
+            [2, 3, 4, 5]
+        ],
+        'normal3' => [
+            [3, 4, 5, 6],
+            [3, 4, 5, 6],
+            [3, 4, 5, 6],
+            [3, 4, 5, 6],
+            [3, 4, 5, 6]
+        ],
+        'normal4' => [
+            [4, 5, 6, 7],
+            [4, 5, 6, 7],
+            [4, 5, 6, 7],
+            [4, 5, 6, 7],
+            [4, 5, 6, 7]
+        ],
+    ],
+    'pfReelConfigs' => [
+        'pf1' => [
+            [1, 2, 3],
+            [1, 2, 3],
+            [1, 2, 3],
+            [1, 2, 3],
+            [1, 2, 3]
+        ],
+        'pf2' => [
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1],
+            [1, 1, 1]
+        ]
+    ],
+    'normalReelProbabilities' => [
+        'normal1' => 30,
+        'normal2' => 25,
+        'normal3' => 25,
+        'normal4' => 20
+    ],
+    'pfReelProbabilities' => [
+        'pf1' => 50,
+        'pf2' => 50,
+    ],
+    'fpMax' => $postData['fpMax'] ?? 0,
+    'fpUsed' => $postData['fpUsed'] ?? 0,
+    'modeStack' => $postData['modeStack'] ?? []
+];
+
+// 创建ReelModule实例
+$reelModule = new ReelModule($config);
+
+// 执行轮次
+$result = $reelModule->playRound();
+
+// 返回结果
+$jsonResult = json_encode([
+    'reelResults' => $result['reelResults'] ?? [],
+    'reward' => intval(round($result['reward'] ?? 0, 0)),
+    'fpMax' => $result['fpMax'] ?? 0,
+    'fpUsed' => $result['fpUsed'] ?? 0,
+    'modeStack' => $result['modeStack'] ?? [],
+    'mode' => $result['mode'] ?? 'normal'
+]);
+
+header('Content-Type: application/json');
+echo $jsonResult;
+exit;
+
+class ReelModule {
+    private $reelSize;
+    private $pfTriggerSymbol;
+    private $pfRoundsConfig;
+    private $payTable;
+    private $totalBet;
+    private $lineBet;
+    private $currentMode;
+    private $pfRoundsLeft;
+    private $fpMax;
+    private $fpUsed;
+    private $modeStack;
+    private $remain;
+    private $pfTriggerReward;
+    private $paylineConfig;
+    private $normalReelConfigs;
+    private $normalReelProbabilities;
+    private $selectedReelConfig;
+    private $pfReelConfigs;
+    private $pfReelProbabilities;
+
+    public function __construct($config) {
+        $this->reelSize = $config['reelSize'];
+        $this->pfTriggerSymbol = $config['pfTriggerSymbol'];
+        $this->pfRoundsConfig = $config['pfRoundsConfig'];
+        $this->payTable = $config['payTable'];
+        $this->totalBet = $config['totalBet'];
+        $this->paylineConfig = $config['paylineConfig'];
+        $this->lineBet = $config['totalBet'] / count($this->paylineConfig);
+        $this->currentMode = 'normal';
+        $this->pfRoundsLeft = 0;
+        $this->fpMax = $config['fpMax'];
+        $this->fpUsed = $config['fpUsed'];
+        $this->modeStack = $config['modeStack'];
+        $this->remain = [];
+        $this->pfTriggerReward = $config['pfTriggerReward'];
+        $this->normalReelConfigs = $config['normalReelConfigs'];
+        $this->normalReelProbabilities = $config['normalReelProbabilities'];
+        $this->pfReelConfigs = $config['pfReelConfigs'] ?? [];
+        $this->pfReelProbabilities = $config['pfReelProbabilities'] ?? [];
+    }
+
+    private function selectReelConfig() {
+        $reelConfigs = $this->currentMode === 'normal' ? $this->normalReelConfigs : $this->pfReelConfigs;
+        $reelProbabilities = $this->currentMode === 'normal' ? $this->normalReelProbabilities : $this->pfReelProbabilities;
+        echo "$reelConfigs \n";
+        $rand = mt_rand(1, 100);
+        $cumulativeProbability = 0;
+        foreach ($reelProbabilities as $configKey => $probability) {
+            $cumulativeProbability += $probability;
+            if ($rand <= $cumulativeProbability) {
+                $this->selectedReelConfig = $configKey;
+                return $reelConfigs[$configKey];
+            }
+        }
+
+        // 如果概率总和不为100，默认返回第一个配置
+        $this->selectedReelConfig = array_key_first($reelConfigs);
+        return reset($reelConfigs);
+    }
+
+    private function generateReelResults() {
+        $reels = [];
+        $currentReelConfig = $this->selectReelConfig();
+
+        for ($i = 0; $i < $this->reelSize[1]; $i++) {
+            $startIndex = mt_rand(0, count($currentReelConfig[$i]) - 1);
+            $reels[$i] = $this->getReelSymbols($currentReelConfig[$i], $this->reelSize[0], $startIndex);
+        }
+        return $reels;
+    }
+
+    private function getReelSymbols($reelStrip, $numSymbols, $startIndex) {
+        $symbols = [];
+        for ($i = 0; $i < $numSymbols; $i++) {
+            $symbols[] = $reelStrip[($startIndex + $i) % count($reelStrip)];
+        }
+        return $symbols;
+    }
+
+    private function checkPFTrigger($reelResults) {
+        $scatterCount = 0;
+        foreach ($reelResults as $reel) {
+            foreach ($reel as $symbol) {
+                if ($symbol == $this->pfTriggerSymbol) {
+                    $scatterCount++;
+                }
+            }
+        }
+        return [
+            'scatterCount' => $scatterCount,
+            'pfRounds' => isset($this->pfRoundsConfig[$scatterCount]) ? $this->pfRoundsConfig[$scatterCount] : 0
+        ];
+    }
+
+    private function calculateLineReward($reelResults) {
+        $totalReward = 0;
+        $lineRewards = array_fill(0, count($this->paylineConfig), 0);
+        $lineCounts = array_fill(0, count($this->paylineConfig), 0);
+
+        foreach ($this->paylineConfig as $index => $payline) {
+            $lineSymbols = [];
+            for ($i = 0; $i < count($payline); $i++) {
+                $lineSymbols[] = $reelResults[$i][$payline[$i]];
+            }
+            $result = $this->calculatePaylineReward($lineSymbols);
+            $totalReward += $result['reward'];
+
+            $lineRewards[$index] = $result['reward'];
+            $lineCounts[$index] = $result['count'];
+        }
+
+        return [
+            'totalReward' => $totalReward,
+            'lineRewards' => $lineRewards,
+            'lineCounts' => $lineCounts
+        ];
+    }
+
+    private function calculatePaylineReward($lineSymbols) {
+        $firstSymbol = $lineSymbols[0];
+        $count = 1;
+        for ($i = 1; $i < count($lineSymbols); $i++) {
+            if ($lineSymbols[$i] == $firstSymbol) {
+                $count++;
+            } else {
+                break;
+            }
+        }
+        $payMultiplier = $this->payTable[$count][$firstSymbol - 1] ?? 0;
+        $reward = $payMultiplier * $this->lineBet;
+        return [
+            'symbol' => $firstSymbol,
+            'count' => $count,
+            'reward' => $reward
+        ];
+    }
+
+    private function updateModeStack() {
+        $this->modeStack = [];
+        if ($this->fpMax - $this->fpUsed > 0) {
+            if (!in_array('pf', $this->modeStack)) {
+                array_push($this->modeStack, 'pf');
+            }
+            $this->remain['pf'] = $this->fpMax - $this->fpUsed;
+        } else {
+            $this->modeStack = array_diff($this->modeStack, ['pf']);
+            $this->remain['pf'] = 0;
+            if ($this->remain['pf'] == 0) {
+                unset($this->remain['pf']);
+            }
+        }
+    }
+
+    public function normalPlayRound() {
+        $reelResults = $this->generateReelResults();
+        $pfTriggerResult = $this->checkPFTrigger($reelResults);
+        $scatterCount = $pfTriggerResult['scatterCount'];
+        $pfRounds = $pfTriggerResult['pfRounds'];
+
+        $lineRewardResult = $this->calculateLineReward($reelResults);
+        $reward = $lineRewardResult['totalReward'];
+
+        if ($pfRounds > 0) {
+            $this->pfRoundsLeft = $pfRounds;
+            $this->fpMax = $pfRounds;
+            $this->fpUsed = 0;
+            // $reward += $this->totalBet * ($this->pfTriggerReward[$scatterCount] ?? 0);
+        }
+
+        $this->updateModeStack();
+
+        return [
+            'mode' => 'normal',
+            'selectedReelConfig' => $this->selectedReelConfig,
+            'pfRounds' => $pfRounds,
+            'scatterCount' => $scatterCount,
+            'reward' => $reward,
+            'reelResults' => $reelResults,
+            'lineRewards' => $lineRewardResult['lineRewards'],
+            'lineCounts' => $lineRewardResult['lineCounts'],
+            'fpMax' => $this->fpMax,
+            'fpUsed' => $this->fpUsed,
+            'modeStack' => $this->modeStack,
+            'remain' => $this->remain
+        ];
+    }
+
+    public function pfPlayRound() {
+
+        $this->pfRoundsLeft = $this->fpMax - $this->fpUsed;
+        if ($this->pfRoundsLeft <= 0) {
+            return ['error' => 'No PF rounds left'];
+        }
+        $reelResults = $this->generateReelResults();
+        $lineRewardResult = $this->calculateLineReward($reelResults);
+        $reward = $lineRewardResult['totalReward'];
+        $this->fpUsed++;
+        $this->pfRoundsLeft--;
+
+        $this->updateModeStack();
+
+        return [
+            'mode' => 'pf',
+            'selectedReelConfig' => $this->selectedReelConfig,
+            'pfRoundsLeft' => $this->pfRoundsLeft,
+            'reelResults' => $reelResults,
+            'reward' => $reward,
+            'lineRewards' => $lineRewardResult['lineRewards'],
+            'lineCounts' => $lineRewardResult['lineCounts'],
+            'fpMax' => $this->fpMax,
+            'fpUsed' => $this->fpUsed,
+            'modeStack' => $this->modeStack,
+            'remain' => $this->remain
+        ];
+    }
+
+    public function playRound() {
+        // echo "111 \n";
+        // echo "TEST: " . print_r($this->modeStack, true);
+        if (!empty($this->modeStack) && end($this->modeStack) === 'pf' && $this->fpMax - $this->fpUsed > 0) {
+            $this->currentMode = 'pf';
+        } else {
+            $this->currentMode = 'normal';
+        }
+        if ($this->currentMode === 'normal') {
+            $result = $this->normalPlayRound();
+        } elseif ($this->currentMode === 'pf') {
+            $result = $this->pfPlayRound();
+        } else {
+            $result = ['error' => 'Invalid mode'];
+        }
+
+        // 确保结果中包含reelResults
+        if (!isset($result['reelResults'])) {
+            $result['reelResults'] = $this->reelResults ?? [];
+        }
+
+        return $result;
+    }
+}
+
+?>
