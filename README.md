@@ -1,4 +1,5 @@
 # Slot Machine Game
+<img width="747" alt="image" src="https://github.com/user-attachments/assets/f81e3e47-20af-4ea7-a65e-f522bc79df57">
 
 ## Introduction
 This is a simple slot machine game that consists of a front-end and a back-end part.
